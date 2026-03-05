@@ -1,83 +1,115 @@
 "use client";
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { ChevronLeft, TrendingUp, TrendingDown, DollarSign, PieChart } from "lucide-react";
-import {
-  BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid,
-  Tooltip, ResponsiveContainer, Legend, PieChart as RechartsPie, Pie, Cell,
-} from "recharts";
+import { ChevronLeft, TrendingUp, TrendingDown, Plus, Trash2 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 
-const COLORS = ["#3b82f6", "#f59e0b", "#8b5cf6", "#10b981", "#f97316", "#ef4444"];
 const TIER_RATES: Record<string, number> = { Silver: 50, Gold: 90, Platinum: 150 };
+const EXPENSE_CATEGORIES = ["Labor", "Rent / Lease", "Equipment", "Utilities", "Maintenance", "Software", "Insurance", "Marketing", "Other"];
+const REVENUE_SOURCES = ["Retail", "Event", "Sponsorship", "Other"];
 
-type RevenueRow = { month: string; memberships: number; one_off: number; retail: number; total: number };
-type ExpenseRow = { month: string; labor: number; utilities: number; maintenance: number; software: number; lease: number; equipment: number; total: number };
+type ExpenseLog = { id: string; date: string; amount: number; category: string; description: string };
+type RevenueLog = { id: string; date: string; amount: number; source: string; description: string };
 
-const currentMonth = new Date().toLocaleDateString("en-US", { month: "short", year: "numeric" });
+const now = new Date();
+const currentMonthAbbr = now.toLocaleDateString("en-US", { month: "short" });
+const currentYear = now.getFullYear();
+const currentMonthLabel = now.toLocaleDateString("en-US", { month: "short", year: "numeric" });
+const todayStr = `${currentYear}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+
+function isThisMonth(dateStr: string) {
+  const d = new Date(dateStr + "T12:00:00");
+  return d.getFullYear() === currentYear && d.getMonth() === now.getMonth();
+}
 
 export default function FinancesPage() {
-  const [revenue, setRevenue] = useState<RevenueRow[]>([]);
-  const [expenses, setExpenses] = useState<ExpenseRow[]>([]);
+  const [tab, setTab] = useState<"revenue" | "expenses">("revenue");
+  const [expenseLogs, setExpenseLogs] = useState<ExpenseLog[]>([]);
+  const [revenueLogs, setRevenueLogs] = useState<RevenueLog[]>([]);
+  const [membershipRevenue, setMembershipRevenue] = useState(0);
+  const [bookingRevenue, setBookingRevenue] = useState(0);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [saveMsg, setSaveMsg] = useState<string | null>(null);
 
-  const [expForm, setExpForm] = useState({ labor: 0, utilities: 0, maintenance: 0, software: 0, lease: 0, equipment: 0 });
-  const [revForm, setRevForm] = useState({ memberships: 0, one_off: 0, retail: 0 });
-  const [autoMemberships, setAutoMemberships] = useState(0);
+  const [expForm, setExpForm] = useState({ date: todayStr, amount: "", category: "Rent / Lease", description: "" });
+  const [revForm, setRevForm] = useState({ date: todayStr, amount: "", source: "Retail", description: "" });
 
   const loadData = async () => {
-    const [{ data: rev }, { data: exp }, { data: members }] = await Promise.all([
-      supabase.from("revenue_entries").select("*").order("created_at"),
-      supabase.from("expense_entries").select("*").order("created_at"),
+    const [{ data: exp }, { data: rev }, { data: members }, { data: bookings }] = await Promise.all([
+      supabase.from("expense_logs").select("*").order("date", { ascending: false }),
+      supabase.from("revenue_logs").select("*").order("date", { ascending: false }),
       supabase.from("members").select("tier"),
+      supabase.from("bookings").select("payment_method, date").eq("status", "confirmed"),
     ]);
 
-    // Auto-calculate membership revenue from real member data
+    if (exp) setExpenseLogs(exp);
+    if (rev) setRevenueLogs(rev);
+
     if (members) {
-      const calc = members.reduce((sum, m) => sum + (TIER_RATES[m.tier] ?? 0), 0);
-      setAutoMemberships(calc);
-      setRevForm((prev) => ({ ...prev, memberships: calc }));
+      setMembershipRevenue(members.reduce((sum, m) => sum + (TIER_RATES[m.tier] ?? 0), 0));
     }
 
-    if (rev) {
-      setRevenue(rev);
-      const cur = rev.find((r) => r.month === currentMonth);
-      if (cur) setRevForm({ memberships: members ? members.reduce((sum, m) => sum + (TIER_RATES[m.tier] ?? 0), 0) : cur.memberships, one_off: cur.one_off, retail: cur.retail });
+    if (bookings) {
+      const cardRevenue = bookings
+        .filter((b) => {
+          const parts = b.date?.split(" ");
+          return parts?.[0] === currentMonthAbbr && parts?.[2] === String(currentYear);
+        })
+        .reduce((sum, b) => {
+          const match = b.payment_method?.match(/\$(\d+)/);
+          return sum + (match ? parseInt(match[1]) : 0);
+        }, 0);
+      setBookingRevenue(cardRevenue);
     }
-    if (exp) {
-      setExpenses(exp);
-      const cur = exp.find((e) => e.month === currentMonth);
-      if (cur) setExpForm({ labor: cur.labor, utilities: cur.utilities, maintenance: cur.maintenance, software: cur.software, lease: cur.lease ?? 0, equipment: cur.equipment ?? 0 });
-    }
+
     setLoading(false);
   };
 
   useEffect(() => { loadData(); }, []);
 
-  const saveExpenses = async () => {
+  const addExpense = async () => {
+    if (!expForm.amount) return;
     setSaving(true);
-    setSaveMsg(null);
-    const total = expForm.labor + expForm.utilities + expForm.maintenance + expForm.software + expForm.lease + expForm.equipment;
-    await supabase.from("expense_entries").upsert({ month: currentMonth, ...expForm, total }, { onConflict: "month" });
+    await supabase.from("expense_logs").insert([{
+      date: expForm.date, amount: parseFloat(expForm.amount),
+      category: expForm.category, description: expForm.description,
+    }]);
+    setExpForm((p) => ({ ...p, amount: "", description: "" }));
     await loadData();
     setSaving(false);
-    setSaveMsg("Expenses saved!");
-    setTimeout(() => setSaveMsg(null), 3000);
   };
 
-  const saveRevenue = async () => {
+  const addRevenue = async () => {
+    if (!revForm.amount) return;
     setSaving(true);
-    setSaveMsg(null);
-    const memberships = autoMemberships;
-    const total = memberships + revForm.one_off + revForm.retail;
-    await supabase.from("revenue_entries").upsert({ month: currentMonth, memberships, one_off: revForm.one_off, retail: revForm.retail, total }, { onConflict: "month" });
+    await supabase.from("revenue_logs").insert([{
+      date: revForm.date, amount: parseFloat(revForm.amount),
+      source: revForm.source, description: revForm.description,
+    }]);
+    setRevForm((p) => ({ ...p, amount: "", description: "" }));
     await loadData();
     setSaving(false);
-    setSaveMsg("Revenue saved!");
-    setTimeout(() => setSaveMsg(null), 3000);
   };
+
+  const deleteExpense = async (id: string) => {
+    await supabase.from("expense_logs").delete().eq("id", id);
+    setExpenseLogs((prev) => prev.filter((e) => e.id !== id));
+  };
+
+  const deleteRevenue = async (id: string) => {
+    await supabase.from("revenue_logs").delete().eq("id", id);
+    setRevenueLogs((prev) => prev.filter((r) => r.id !== id));
+  };
+
+  const thisMonthExpenses = expenseLogs.filter((e) => isThisMonth(e.date));
+  const thisMonthManualRevenue = revenueLogs.filter((r) => isThisMonth(r.date));
+  const totalExpenses = thisMonthExpenses.reduce((s, e) => s + e.amount, 0);
+  const manualRevenueTotal = thisMonthManualRevenue.reduce((s, r) => s + r.amount, 0);
+  const totalRevenue = membershipRevenue + bookingRevenue + manualRevenueTotal;
+  const netProfit = totalRevenue - totalExpenses;
+
+  const formatDate = (dateStr: string) =>
+    new Date(dateStr + "T12:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
 
   if (loading) return (
     <div className="min-h-screen bg-gray-950 flex items-center justify-center">
@@ -85,299 +117,263 @@ export default function FinancesPage() {
     </div>
   );
 
-  const combined = revenue.map((r, i) => ({
-    month: r.month,
-    Revenue: r.total,
-    Expenses: expenses[i]?.total ?? 0,
-    Profit: r.total - (expenses[i]?.total ?? 0),
-  }));
-
-  const latest = combined[combined.length - 1] ?? { Revenue: 0, Expenses: 0, Profit: 0 };
-  const prev = combined[combined.length - 2] ?? { Revenue: 0 };
-  const revenueGrowth = prev.Revenue ? (((latest.Revenue - prev.Revenue) / prev.Revenue) * 100).toFixed(1) : "0";
-  const profitMargin = latest.Revenue ? ((latest.Profit / latest.Revenue) * 100).toFixed(0) : "0";
-
-  const latestRev = revenue[revenue.length - 1];
-  const latestExp = expenses[expenses.length - 1];
-
-  const revBreakdown = latestRev ? [
-    { name: "Memberships", value: latestRev.memberships },
-    { name: "One-off Bookings", value: latestRev.one_off },
-    { name: "Retail", value: latestRev.retail },
-  ] : [];
-
-  const expBreakdown = latestExp ? [
-    { name: "Labor", value: latestExp.labor },
-    { name: "Utilities", value: latestExp.utilities },
-    { name: "Maintenance", value: latestExp.maintenance },
-    { name: "Software", value: latestExp.software },
-    { name: "Lease", value: latestExp.lease ?? 0 },
-    { name: "Equipment", value: latestExp.equipment ?? 0 },
-  ].filter(e => e.value > 0) : [];
-
   return (
     <div className="min-h-screen bg-gray-950 py-12 px-4">
-      <div className="max-w-7xl mx-auto">
+      <div className="max-w-5xl mx-auto">
+
         <div className="flex items-center gap-3 mb-2">
           <Link href="/admin" className="text-gray-400 hover:text-white transition-colors">
             <ChevronLeft className="h-5 w-5" />
           </Link>
           <h1 className="text-3xl font-bold text-white">Financial Dashboard</h1>
         </div>
-        <p className="text-gray-400 mb-8 ml-8">Live data from Supabase · Sep 2025 – Mar 2026</p>
+        <p className="text-gray-400 mb-8 ml-8">{currentMonthLabel}</p>
 
-        {/* Entry Forms */}
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
-          {/* Expense Entry */}
-          <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6">
-            <div className="flex items-center justify-between mb-4">
-              <div>
-                <h2 className="text-white font-bold">Log Expenses</h2>
-                <p className="text-gray-500 text-xs mt-0.5">{currentMonth} · updates charts below</p>
-              </div>
-              <TrendingDown className="h-5 w-5 text-red-400" />
-            </div>
-            <div className="grid grid-cols-2 gap-3 mb-4">
-              {(["labor", "utilities", "maintenance", "software", "lease", "equipment"] as const).map((field) => (
-                <div key={field}>
-                  <label className="text-gray-400 text-xs capitalize mb-1 block">{field}</label>
-                  <div className="flex items-center bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 focus-within:border-blue-500">
-                    <span className="text-gray-500 text-sm mr-1">$</span>
-                    <input
-                      type="number" min={0}
-                      value={expForm[field] || ""}
-                      onChange={(e) => setExpForm((p) => ({ ...p, [field]: Number(e.target.value) || 0 }))}
-                      className="bg-transparent text-white text-sm w-full outline-none"
-                      placeholder="0"
-                    />
-                  </div>
-                </div>
-              ))}
-            </div>
-            <div className="flex items-center justify-between">
-              <span className="text-gray-400 text-sm">Total: <span className="text-red-400 font-bold">${(expForm.labor + expForm.utilities + expForm.maintenance + expForm.software + expForm.lease + expForm.equipment).toLocaleString()}</span></span>
-              <button onClick={saveExpenses} disabled={saving}
-                className="bg-red-600 hover:bg-red-500 disabled:bg-gray-700 text-white font-semibold px-4 py-2 rounded-lg text-sm transition-colors">
-                {saving ? "Saving…" : "Save Expenses"}
-              </button>
-            </div>
+        {/* KPI Cards */}
+        <div className="grid grid-cols-3 gap-4 mb-8">
+          <div className="bg-gray-900 border border-gray-800 rounded-2xl p-5">
+            <TrendingUp className="h-5 w-5 text-green-400 mb-2" />
+            <p className="text-2xl font-black text-green-400">${totalRevenue.toLocaleString()}</p>
+            <p className="text-white text-sm font-medium mt-1">Monthly Revenue</p>
+            <p className="text-gray-500 text-xs">Memberships + Bookings + Manual</p>
           </div>
-
-          {/* Revenue Entry */}
-          <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6">
-            <div className="flex items-center justify-between mb-4">
-              <div>
-                <h2 className="text-white font-bold">Log Revenue</h2>
-                <p className="text-gray-500 text-xs mt-0.5">{currentMonth} · updates charts below</p>
-              </div>
-              <TrendingUp className="h-5 w-5 text-green-400" />
-            </div>
-            <div className="grid grid-cols-2 gap-3 mb-4">
-              {/* Memberships — auto-calculated, read-only */}
-              <div className="col-span-2">
-                <label className="text-gray-400 text-xs mb-1 flex items-center gap-2">
-                  Memberships
-                  <span className="bg-blue-500/20 text-blue-400 text-xs px-1.5 py-0.5 rounded">auto</span>
-                </label>
-                <div className="flex items-center bg-gray-800/50 border border-gray-700/50 rounded-lg px-3 py-2">
-                  <span className="text-gray-500 text-sm mr-1">$</span>
-                  <span className="text-white text-sm font-semibold">{autoMemberships.toLocaleString()}</span>
-                  <span className="text-gray-500 text-xs ml-auto">calculated from {Object.keys(TIER_RATES).join(" / ")} tiers</span>
-                </div>
-              </div>
-              {/* One-off and Retail — manual */}
-              {(["one_off", "retail"] as const).map((field) => (
-                <div key={field}>
-                  <label className="text-gray-400 text-xs capitalize mb-1 block">{field.replace("_", " ")}</label>
-                  <div className="flex items-center bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 focus-within:border-blue-500">
-                    <span className="text-gray-500 text-sm mr-1">$</span>
-                    <input
-                      type="number" min={0}
-                      value={revForm[field] || ""}
-                      onChange={(e) => setRevForm((p) => ({ ...p, [field]: Number(e.target.value) || 0 }))}
-                      className="bg-transparent text-white text-sm w-full outline-none"
-                      placeholder="0"
-                    />
-                  </div>
-                </div>
-              ))}
-            </div>
-            <div className="flex items-center justify-between">
-              <span className="text-gray-400 text-sm">Total: <span className="text-green-400 font-bold">${(autoMemberships + revForm.one_off + revForm.retail).toLocaleString()}</span></span>
-              <button onClick={saveRevenue} disabled={saving}
-                className="bg-green-600 hover:bg-green-500 disabled:bg-gray-700 text-white font-semibold px-4 py-2 rounded-lg text-sm transition-colors">
-                {saving ? "Saving…" : "Save Revenue"}
-              </button>
-            </div>
+          <div className="bg-gray-900 border border-gray-800 rounded-2xl p-5">
+            <TrendingDown className="h-5 w-5 text-red-400 mb-2" />
+            <p className="text-2xl font-black text-red-400">${totalExpenses.toLocaleString()}</p>
+            <p className="text-white text-sm font-medium mt-1">Monthly Expenses</p>
+            <p className="text-gray-500 text-xs">{thisMonthExpenses.length} entries logged</p>
+          </div>
+          <div className="bg-gray-900 border border-gray-800 rounded-2xl p-5">
+            <p className={`text-2xl font-black ${netProfit >= 0 ? "text-blue-400" : "text-orange-400"}`}>
+              ${netProfit.toLocaleString()}
+            </p>
+            <p className="text-white text-sm font-medium mt-1">Net Profit</p>
+            <p className="text-gray-500 text-xs">
+              {totalRevenue > 0 ? `${((netProfit / totalRevenue) * 100).toFixed(0)}% margin` : "—"}
+            </p>
           </div>
         </div>
 
-        {saveMsg && (
-          <div className="mb-6 bg-green-950/30 border border-green-500/30 rounded-xl px-4 py-3 text-green-300 text-sm">
-            {saveMsg}
+        {/* Tabs */}
+        <div className="flex gap-1 bg-gray-900 border border-gray-800 rounded-xl p-1 mb-6 w-fit">
+          <button onClick={() => setTab("revenue")}
+            className={`px-6 py-2 rounded-lg text-sm font-semibold transition-colors ${tab === "revenue" ? "bg-green-600 text-white" : "text-gray-400 hover:text-white"}`}>
+            Revenue
+          </button>
+          <button onClick={() => setTab("expenses")}
+            className={`px-6 py-2 rounded-lg text-sm font-semibold transition-colors ${tab === "expenses" ? "bg-red-600 text-white" : "text-gray-400 hover:text-white"}`}>
+            Expenses
+          </button>
+        </div>
+
+        {/* ── REVENUE TAB ── */}
+        {tab === "revenue" && (
+          <div className="space-y-6">
+
+            {/* Auto-generated breakdown */}
+            <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6">
+              <h2 className="text-white font-bold mb-4">
+                Auto-Generated Revenue
+                <span className="text-gray-500 text-xs font-normal ml-2">{currentMonthLabel}</span>
+              </h2>
+              <div className="space-y-3">
+                <div className="flex justify-between items-center py-2.5 border-b border-gray-800">
+                  <div>
+                    <p className="text-white text-sm font-medium">Memberships</p>
+                    <p className="text-gray-500 text-xs">Silver × $50 · Gold × $90 · Platinum × $150</p>
+                  </div>
+                  <span className="text-green-400 font-bold text-lg">${membershipRevenue.toLocaleString()}</span>
+                </div>
+                <div className="flex justify-between items-center py-2.5 border-b border-gray-800">
+                  <div>
+                    <p className="text-white text-sm font-medium">Cage Bookings (card payments)</p>
+                    <p className="text-gray-500 text-xs">Confirmed bookings paid by card this month</p>
+                  </div>
+                  <span className="text-green-400 font-bold text-lg">${bookingRevenue.toLocaleString()}</span>
+                </div>
+                <div className="flex justify-between items-center py-2.5">
+                  <div>
+                    <p className="text-white text-sm font-medium">Manual entries</p>
+                    <p className="text-gray-500 text-xs">{thisMonthManualRevenue.length} entries logged this month</p>
+                  </div>
+                  <span className="text-green-400 font-bold text-lg">${manualRevenueTotal.toLocaleString()}</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Add Manual Revenue */}
+            <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6">
+              <h2 className="text-white font-bold mb-4">Log Manual Revenue Entry</h2>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
+                <div>
+                  <label className="text-gray-400 text-xs mb-1 block">Date</label>
+                  <input type="date" value={revForm.date}
+                    onChange={(e) => setRevForm((p) => ({ ...p, date: e.target.value }))}
+                    className="w-full bg-gray-800 border border-gray-700 text-white rounded-lg px-3 py-2 text-sm outline-none focus:border-green-500"
+                    style={{ colorScheme: "dark" }} />
+                </div>
+                <div>
+                  <label className="text-gray-400 text-xs mb-1 block">Amount</label>
+                  <div className="flex items-center bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 focus-within:border-green-500">
+                    <span className="text-gray-500 text-sm mr-1">$</span>
+                    <input type="number" min={0} placeholder="0" value={revForm.amount}
+                      onChange={(e) => setRevForm((p) => ({ ...p, amount: e.target.value }))}
+                      className="bg-transparent text-white text-sm w-full outline-none" />
+                  </div>
+                </div>
+                <div>
+                  <label className="text-gray-400 text-xs mb-1 block">Source</label>
+                  <select value={revForm.source} onChange={(e) => setRevForm((p) => ({ ...p, source: e.target.value }))}
+                    className="w-full bg-gray-800 border border-gray-700 text-white rounded-lg px-3 py-2 text-sm outline-none focus:border-green-500">
+                    {REVENUE_SOURCES.map((s) => <option key={s}>{s}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="text-gray-400 text-xs mb-1 block">Description</label>
+                  <input type="text" placeholder="e.g. team event" value={revForm.description}
+                    onChange={(e) => setRevForm((p) => ({ ...p, description: e.target.value }))}
+                    className="w-full bg-gray-800 border border-gray-700 text-white rounded-lg px-3 py-2 text-sm outline-none focus:border-green-500" />
+                </div>
+              </div>
+              <button onClick={addRevenue} disabled={saving || !revForm.amount}
+                className="flex items-center gap-2 bg-green-600 hover:bg-green-500 disabled:bg-gray-700 disabled:text-gray-500 text-white font-semibold px-4 py-2 rounded-lg text-sm transition-colors">
+                <Plus className="h-4 w-4" /> Add Revenue Entry
+              </button>
+            </div>
+
+            {/* Revenue Log */}
+            <div className="bg-gray-900 border border-gray-800 rounded-2xl overflow-hidden">
+              <div className="px-6 py-4 border-b border-gray-800 flex items-center justify-between">
+                <h2 className="text-white font-bold">Manual Revenue Log</h2>
+                <span className="text-gray-500 text-sm">{revenueLogs.length} entries</span>
+              </div>
+              {revenueLogs.length === 0 ? (
+                <p className="text-gray-500 text-sm text-center py-10">No manual revenue entries yet.</p>
+              ) : (
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-gray-800 text-gray-500 text-xs uppercase tracking-wide">
+                      <th className="text-left px-6 py-3">Date</th>
+                      <th className="text-left px-6 py-3">Source</th>
+                      <th className="text-left px-6 py-3">Description</th>
+                      <th className="text-right px-6 py-3">Amount</th>
+                      <th className="px-4 py-3"></th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-800">
+                    {revenueLogs.map((r) => (
+                      <tr key={r.id} className="hover:bg-gray-800/30 transition-colors group">
+                        <td className="px-6 py-3 text-gray-400">{formatDate(r.date)}</td>
+                        <td className="px-6 py-3">
+                          <span className="bg-green-500/10 text-green-400 text-xs font-semibold px-2 py-0.5 rounded-full border border-green-500/20">{r.source}</span>
+                        </td>
+                        <td className="px-6 py-3 text-gray-300">{r.description || "—"}</td>
+                        <td className="px-6 py-3 text-right text-green-400 font-semibold">${Number(r.amount).toLocaleString()}</td>
+                        <td className="px-4 py-3 text-right">
+                          <button onClick={() => deleteRevenue(r.id)}
+                            className="opacity-0 group-hover:opacity-100 text-red-400 hover:text-red-300 transition-opacity">
+                            <Trash2 className="h-4 w-4" />
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
           </div>
         )}
 
-        {/* KPIs */}
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-8">
-          {[
-            { label: "Monthly Revenue", value: `$${latest.Revenue.toLocaleString()}`, sub: `+${revenueGrowth}% vs last month`, color: "text-green-400", icon: TrendingUp },
-            { label: "Monthly Expenses", value: `$${latest.Expenses.toLocaleString()}`, sub: "All operating costs", color: "text-red-400", icon: TrendingDown },
-            { label: "Net Profit", value: `$${latest.Profit.toLocaleString()}`, sub: `${profitMargin}% margin`, color: "text-blue-400", icon: DollarSign },
-            { label: "YTD Revenue", value: `$${revenue.reduce((a, b) => a + b.total, 0).toLocaleString()}`, sub: "Since Sept 2025", color: "text-purple-400", icon: PieChart },
-          ].map((k) => (
-            <div key={k.label} className="bg-gray-900 border border-gray-800 rounded-2xl p-5">
-              <k.icon className={`h-5 w-5 ${k.color} mb-2`} />
-              <p className={`text-2xl font-black ${k.color}`}>{k.value}</p>
-              <p className="text-white text-sm font-medium mt-1">{k.label}</p>
-              <p className="text-gray-500 text-xs">{k.sub}</p>
-            </div>
-          ))}
-        </div>
+        {/* ── EXPENSES TAB ── */}
+        {tab === "expenses" && (
+          <div className="space-y-6">
 
-        {/* Bar Chart */}
-        <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6 mb-6">
-          <h2 className="text-white font-bold text-lg mb-1">Revenue vs. Expenses vs. Profit</h2>
-          <p className="text-gray-400 text-sm mb-6">Monthly comparison</p>
-          <ResponsiveContainer width="100%" height={280}>
-            <BarChart data={combined}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#1f2937" />
-              <XAxis dataKey="month" tick={{ fill: "#6b7280", fontSize: 12 }} />
-              <YAxis tick={{ fill: "#6b7280", fontSize: 12 }} tickFormatter={(v) => `$${(v / 1000).toFixed(0)}k`} />
-              <Tooltip contentStyle={{ background: "#111827", border: "1px solid #374151", borderRadius: "8px", color: "#fff" }} formatter={(v: number | undefined) => [`$${(v ?? 0).toLocaleString()}`, ""]} />
-              <Legend wrapperStyle={{ color: "#9ca3af" }} />
-              <Bar dataKey="Revenue" fill="#10b981" radius={[4, 4, 0, 0]} />
-              <Bar dataKey="Expenses" fill="#ef4444" radius={[4, 4, 0, 0]} />
-              <Bar dataKey="Profit" fill="#3b82f6" radius={[4, 4, 0, 0]} />
-            </BarChart>
-          </ResponsiveContainer>
-        </div>
-
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
-          {/* Revenue Pie */}
-          <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6">
-            <h2 className="text-white font-bold mb-1">Revenue Breakdown (March)</h2>
-            <p className="text-gray-400 text-sm mb-4">By source</p>
-            <div className="flex items-center gap-6">
-              <ResponsiveContainer width="50%" height={180}>
-                <RechartsPie>
-                  <Pie data={revBreakdown} cx="50%" cy="50%" innerRadius={50} outerRadius={80} dataKey="value" paddingAngle={3}>
-                    {revBreakdown.map((_, i) => <Cell key={i} fill={COLORS[i]} />)}
-                  </Pie>
-                  <Tooltip contentStyle={{ background: "#111827", border: "1px solid #374151", borderRadius: "8px" }} formatter={(v: number | undefined) => `$${(v ?? 0).toLocaleString()}`} />
-                </RechartsPie>
-              </ResponsiveContainer>
-              <div className="space-y-3 flex-1">
-                {revBreakdown.map((item, i) => (
-                  <div key={item.name} className="flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      <div className="w-3 h-3 rounded-sm" style={{ background: COLORS[i] }} />
-                      <span className="text-gray-300 text-sm">{item.name}</span>
-                    </div>
-                    <span className="text-white font-semibold text-sm">${item.value.toLocaleString()}</span>
+            {/* Add Expense */}
+            <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6">
+              <h2 className="text-white font-bold mb-4">Log Expense</h2>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
+                <div>
+                  <label className="text-gray-400 text-xs mb-1 block">Date</label>
+                  <input type="date" value={expForm.date}
+                    onChange={(e) => setExpForm((p) => ({ ...p, date: e.target.value }))}
+                    className="w-full bg-gray-800 border border-gray-700 text-white rounded-lg px-3 py-2 text-sm outline-none focus:border-red-500"
+                    style={{ colorScheme: "dark" }} />
+                </div>
+                <div>
+                  <label className="text-gray-400 text-xs mb-1 block">Amount</label>
+                  <div className="flex items-center bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 focus-within:border-red-500">
+                    <span className="text-gray-500 text-sm mr-1">$</span>
+                    <input type="number" min={0} placeholder="0" value={expForm.amount}
+                      onChange={(e) => setExpForm((p) => ({ ...p, amount: e.target.value }))}
+                      className="bg-transparent text-white text-sm w-full outline-none" />
                   </div>
-                ))}
-                <div className="border-t border-gray-700 pt-2 flex justify-between">
-                  <span className="text-gray-400 text-sm">Total</span>
-                  <span className="text-green-400 font-bold">${revBreakdown.reduce((a, b) => a + b.value, 0).toLocaleString()}</span>
+                </div>
+                <div>
+                  <label className="text-gray-400 text-xs mb-1 block">Category</label>
+                  <select value={expForm.category} onChange={(e) => setExpForm((p) => ({ ...p, category: e.target.value }))}
+                    className="w-full bg-gray-800 border border-gray-700 text-white rounded-lg px-3 py-2 text-sm outline-none focus:border-red-500">
+                    {EXPENSE_CATEGORIES.map((c) => <option key={c}>{c}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="text-gray-400 text-xs mb-1 block">Description</label>
+                  <input type="text" placeholder="e.g. March rent" value={expForm.description}
+                    onChange={(e) => setExpForm((p) => ({ ...p, description: e.target.value }))}
+                    className="w-full bg-gray-800 border border-gray-700 text-white rounded-lg px-3 py-2 text-sm outline-none focus:border-red-500" />
                 </div>
               </div>
+              <button onClick={addExpense} disabled={saving || !expForm.amount}
+                className="flex items-center gap-2 bg-red-600 hover:bg-red-500 disabled:bg-gray-700 disabled:text-gray-500 text-white font-semibold px-4 py-2 rounded-lg text-sm transition-colors">
+                <Plus className="h-4 w-4" /> Add Expense
+              </button>
             </div>
-          </div>
 
-          {/* Expense Pie */}
-          <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6">
-            <h2 className="text-white font-bold mb-1">Expense Breakdown (March)</h2>
-            <p className="text-gray-400 text-sm mb-4">By category</p>
-            <div className="flex items-center gap-6">
-              <ResponsiveContainer width="50%" height={180}>
-                <RechartsPie>
-                  <Pie data={expBreakdown} cx="50%" cy="50%" innerRadius={50} outerRadius={80} dataKey="value" paddingAngle={3}>
-                    {expBreakdown.map((_, i) => <Cell key={i} fill={COLORS[i + 1]} />)}
-                  </Pie>
-                  <Tooltip contentStyle={{ background: "#111827", border: "1px solid #374151", borderRadius: "8px" }} formatter={(v: number | undefined) => `$${(v ?? 0).toLocaleString()}`} />
-                </RechartsPie>
-              </ResponsiveContainer>
-              <div className="space-y-3 flex-1">
-                {expBreakdown.map((item, i) => (
-                  <div key={item.name} className="flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      <div className="w-3 h-3 rounded-sm" style={{ background: COLORS[i + 1] }} />
-                      <span className="text-gray-300 text-sm">{item.name}</span>
-                    </div>
-                    <span className="text-white font-semibold text-sm">${item.value.toLocaleString()}</span>
-                  </div>
-                ))}
-                <div className="border-t border-gray-700 pt-2 flex justify-between">
-                  <span className="text-gray-400 text-sm">Total</span>
-                  <span className="text-red-400 font-bold">${expBreakdown.reduce((a, b) => a + b.value, 0).toLocaleString()}</span>
-                </div>
+            {/* Expense Log */}
+            <div className="bg-gray-900 border border-gray-800 rounded-2xl overflow-hidden">
+              <div className="px-6 py-4 border-b border-gray-800 flex items-center justify-between">
+                <h2 className="text-white font-bold">Expense Log</h2>
+                <span className="text-gray-500 text-sm">
+                  {expenseLogs.length} entries ·{" "}
+                  <span className="text-red-400 font-semibold">${totalExpenses.toLocaleString()}</span> this month
+                </span>
               </div>
-            </div>
-          </div>
-        </div>
-
-        {/* Profit Trend */}
-        <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6 mb-6">
-          <h2 className="text-white font-bold text-lg mb-1">Profit Trend</h2>
-          <p className="text-gray-400 text-sm mb-6">Net profit growing month-over-month</p>
-          <ResponsiveContainer width="100%" height={220}>
-            <LineChart data={combined}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#1f2937" />
-              <XAxis dataKey="month" tick={{ fill: "#6b7280", fontSize: 12 }} />
-              <YAxis tick={{ fill: "#6b7280", fontSize: 12 }} tickFormatter={(v) => `$${(v / 1000).toFixed(0)}k`} />
-              <Tooltip contentStyle={{ background: "#111827", border: "1px solid #374151", borderRadius: "8px", color: "#fff" }} formatter={(v: number | undefined) => [`$${(v ?? 0).toLocaleString()}`, ""]} />
-              <Line type="monotone" dataKey="Profit" stroke="#3b82f6" strokeWidth={2.5} dot={{ fill: "#3b82f6", r: 4 }} />
-            </LineChart>
-          </ResponsiveContainer>
-        </div>
-
-        {/* Monthly Table */}
-        <div className="bg-gray-900 border border-gray-800 rounded-2xl overflow-hidden">
-          <div className="p-6 border-b border-gray-800">
-            <h2 className="text-white font-bold text-lg">Monthly Breakdown</h2>
-          </div>
-          <div className="overflow-x-auto">
-            <table className="w-full">
-              <thead>
-                <tr className="border-b border-gray-800 text-gray-400 text-xs uppercase tracking-wide">
-                  <th className="text-left px-6 py-3">Month</th>
-                  <th className="text-right px-6 py-3">Memberships</th>
-                  <th className="text-right px-6 py-3">One-off</th>
-                  <th className="text-right px-6 py-3">Retail</th>
-                  <th className="text-right px-6 py-3">Total Rev</th>
-                  <th className="text-right px-6 py-3">Expenses</th>
-                  <th className="text-right px-6 py-3">Net Profit</th>
-                  <th className="text-right px-6 py-3">Margin</th>
-                </tr>
-              </thead>
-              <tbody>
-                {revenue.map((r, i) => {
-                  const exp = expenses[i];
-                  const profit = r.total - (exp?.total ?? 0);
-                  const margin = r.total ? ((profit / r.total) * 100).toFixed(0) : "0";
-                  const isLatest = i === revenue.length - 1;
-                  return (
-                    <tr key={r.month} className={`border-b border-gray-800/50 hover:bg-gray-800/30 transition-colors ${isLatest ? "bg-blue-950/10" : ""}`}>
-                      <td className="px-6 py-3.5 text-white font-medium">{r.month} {isLatest && <span className="text-blue-400 text-xs ml-1">(current)</span>}</td>
-                      <td className="px-6 py-3.5 text-right text-gray-300">${r.memberships.toLocaleString()}</td>
-                      <td className="px-6 py-3.5 text-right text-gray-300">${r.one_off.toLocaleString()}</td>
-                      <td className="px-6 py-3.5 text-right text-gray-300">${r.retail.toLocaleString()}</td>
-                      <td className="px-6 py-3.5 text-right text-green-400 font-semibold">${r.total.toLocaleString()}</td>
-                      <td className="px-6 py-3.5 text-right text-red-400">${(exp?.total ?? 0).toLocaleString()}</td>
-                      <td className="px-6 py-3.5 text-right text-blue-400 font-bold">${profit.toLocaleString()}</td>
-                      <td className="px-6 py-3.5 text-right">
-                        <span className={`font-semibold ${Number(margin) >= 50 ? "text-green-400" : Number(margin) >= 40 ? "text-yellow-400" : "text-orange-400"}`}>
-                          {margin}%
-                        </span>
-                      </td>
+              {expenseLogs.length === 0 ? (
+                <p className="text-gray-500 text-sm text-center py-10">No expenses logged yet.</p>
+              ) : (
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-gray-800 text-gray-500 text-xs uppercase tracking-wide">
+                      <th className="text-left px-6 py-3">Date</th>
+                      <th className="text-left px-6 py-3">Category</th>
+                      <th className="text-left px-6 py-3">Description</th>
+                      <th className="text-right px-6 py-3">Amount</th>
+                      <th className="px-4 py-3"></th>
                     </tr>
-                  );
-                })}
-              </tbody>
-            </table>
+                  </thead>
+                  <tbody className="divide-y divide-gray-800">
+                    {expenseLogs.map((e) => (
+                      <tr key={e.id} className="hover:bg-gray-800/30 transition-colors group">
+                        <td className="px-6 py-3 text-gray-400">{formatDate(e.date)}</td>
+                        <td className="px-6 py-3">
+                          <span className="bg-red-500/10 text-red-400 text-xs font-semibold px-2 py-0.5 rounded-full border border-red-500/20">{e.category}</span>
+                        </td>
+                        <td className="px-6 py-3 text-gray-300">{e.description || "—"}</td>
+                        <td className="px-6 py-3 text-right text-red-400 font-semibold">${Number(e.amount).toLocaleString()}</td>
+                        <td className="px-4 py-3 text-right">
+                          <button onClick={() => deleteExpense(e.id)}
+                            className="opacity-0 group-hover:opacity-100 text-red-400 hover:text-red-300 transition-opacity">
+                            <Trash2 className="h-4 w-4" />
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
           </div>
-        </div>
+        )}
+
       </div>
     </div>
   );

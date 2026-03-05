@@ -35,24 +35,37 @@ export default function AdminPage() {
 
   useEffect(() => {
     const fetchData = async () => {
-      // Get today's date in the format stored in DB e.g. "Mar 5, 2026"
       const today = new Date().toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+      const currentMonthAbbr = new Date().toLocaleDateString("en-US", { month: "short" });
+      const currentYear = new Date().getFullYear();
+      const currentMonthIndex = new Date().getMonth();
 
-      const currentMonth = new Date().toLocaleDateString("en-US", { month: "short", year: "numeric" });
-
-      const [{ data: bookings }, { data: rev }, { data: exp }, { data: memberRows }] = await Promise.all([
+      const [{ data: bookings }, { data: expLogs }, { data: revLogs }, { data: memberRows }, { data: allBookings }] = await Promise.all([
         supabase.from("bookings").select("*").eq("date", today).eq("status", "confirmed").order("time"),
-        supabase.from("revenue_entries").select("total").eq("month", currentMonth).single(),
-        supabase.from("expense_entries").select("total").eq("month", currentMonth).single(),
+        supabase.from("expense_logs").select("amount, date"),
+        supabase.from("revenue_logs").select("amount, date"),
         supabase.from("members").select("id, name, email, tier, credits_total, credits_used, member_since").order("member_since", { ascending: false }),
+        supabase.from("bookings").select("payment_method, date").eq("status", "confirmed"),
       ]);
 
       if (bookings) setTodayBookings(bookings);
-      setRevenue({
-        total: (rev as { total: number } | null)?.total ?? 0,
-        expenses: (exp as { total: number } | null)?.total ?? 0,
-      });
       if (memberRows) { setMemberCount(memberRows.length); setMembers(memberRows); }
+
+      // Expenses: sum expense_logs for current month
+      const totalExpenses = (expLogs ?? [])
+        .filter((e) => { const d = new Date(e.date + "T12:00:00"); return d.getFullYear() === currentYear && d.getMonth() === currentMonthIndex; })
+        .reduce((s, e) => s + e.amount, 0);
+
+      // Revenue: memberships + card bookings + manual logs
+      const membershipRev = (memberRows ?? []).reduce((s, m) => s + (TIER_RATES[m.tier] ?? 0), 0);
+      const bookingRev = (allBookings ?? [])
+        .filter((b) => { const parts = b.date?.split(" "); return parts?.[0] === currentMonthAbbr && parts?.[2] === String(currentYear); })
+        .reduce((s, b) => { const match = b.payment_method?.match(/\$(\d+)/); return s + (match ? parseInt(match[1]) : 0); }, 0);
+      const manualRev = (revLogs ?? [])
+        .filter((r) => { const d = new Date(r.date + "T12:00:00"); return d.getFullYear() === currentYear && d.getMonth() === currentMonthIndex; })
+        .reduce((s, r) => s + r.amount, 0);
+
+      setRevenue({ total: membershipRev + bookingRev + manualRev, expenses: totalExpenses });
       setLoading(false);
     };
 
@@ -62,8 +75,8 @@ export default function AdminPage() {
     const channel = supabase
       .channel("admin-live")
       .on("postgres_changes", { event: "*", schema: "public", table: "bookings" }, fetchData)
-      .on("postgres_changes", { event: "*", schema: "public", table: "revenue_entries" }, fetchData)
-      .on("postgres_changes", { event: "*", schema: "public", table: "expense_entries" }, fetchData)
+      .on("postgres_changes", { event: "*", schema: "public", table: "expense_logs" }, fetchData)
+      .on("postgres_changes", { event: "*", schema: "public", table: "revenue_logs" }, fetchData)
       .subscribe();
 
     return () => { supabase.removeChannel(channel); };
