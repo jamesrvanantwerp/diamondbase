@@ -11,7 +11,7 @@ import { supabase } from "@/lib/supabase";
 const COLORS = ["#3b82f6", "#f59e0b", "#8b5cf6", "#10b981", "#f97316", "#ef4444"];
 
 type RevenueRow = { month: string; memberships: number; one_off: number; retail: number; total: number };
-type ExpenseRow = { month: string; labor: number; utilities: number; maintenance: number; software: number; total: number };
+type ExpenseRow = { month: string; labor: number; utilities: number; maintenance: number; software: number; lease: number; equipment: number; total: number };
 
 const currentMonth = new Date().toLocaleDateString("en-US", { month: "short", year: "numeric" });
 
@@ -22,7 +22,7 @@ export default function FinancesPage() {
   const [saving, setSaving] = useState(false);
   const [saveMsg, setSaveMsg] = useState<string | null>(null);
 
-  const [expForm, setExpForm] = useState({ labor: 0, utilities: 0, maintenance: 0, software: 0 });
+  const [expForm, setExpForm] = useState({ labor: 0, utilities: 0, maintenance: 0, software: 0, lease: 0, equipment: 0 });
   const [revForm, setRevForm] = useState({ memberships: 0, one_off: 0, retail: 0 });
 
   const loadData = async () => {
@@ -38,7 +38,7 @@ export default function FinancesPage() {
     if (exp) {
       setExpenses(exp);
       const cur = exp.find((e) => e.month === currentMonth);
-      if (cur) setExpForm({ labor: cur.labor, utilities: cur.utilities, maintenance: cur.maintenance, software: cur.software });
+      if (cur) setExpForm({ labor: cur.labor, utilities: cur.utilities, maintenance: cur.maintenance, software: cur.software, lease: cur.lease ?? 0, equipment: cur.equipment ?? 0 });
     }
     setLoading(false);
   };
@@ -48,7 +48,7 @@ export default function FinancesPage() {
   const saveExpenses = async () => {
     setSaving(true);
     setSaveMsg(null);
-    const total = expForm.labor + expForm.utilities + expForm.maintenance + expForm.software;
+    const total = expForm.labor + expForm.utilities + expForm.maintenance + expForm.software + expForm.lease + expForm.equipment;
     await supabase.from("expense_entries").upsert({ month: currentMonth, ...expForm, total }, { onConflict: "month" });
     await loadData();
     setSaving(false);
@@ -99,7 +99,9 @@ export default function FinancesPage() {
     { name: "Utilities", value: latestExp.utilities },
     { name: "Maintenance", value: latestExp.maintenance },
     { name: "Software", value: latestExp.software },
-  ] : [];
+    { name: "Lease", value: latestExp.lease ?? 0 },
+    { name: "Equipment", value: latestExp.equipment ?? 0 },
+  ].filter(e => e.value > 0) : [];
 
   return (
     <div className="min-h-screen bg-gray-950 py-12 px-4">
@@ -124,7 +126,7 @@ export default function FinancesPage() {
               <TrendingDown className="h-5 w-5 text-red-400" />
             </div>
             <div className="grid grid-cols-2 gap-3 mb-4">
-              {(["labor", "utilities", "maintenance", "software"] as const).map((field) => (
+              {(["labor", "utilities", "maintenance", "software", "lease", "equipment"] as const).map((field) => (
                 <div key={field}>
                   <label className="text-gray-400 text-xs capitalize mb-1 block">{field}</label>
                   <div className="flex items-center bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 focus-within:border-blue-500">
@@ -141,7 +143,7 @@ export default function FinancesPage() {
               ))}
             </div>
             <div className="flex items-center justify-between">
-              <span className="text-gray-400 text-sm">Total: <span className="text-red-400 font-bold">${(expForm.labor + expForm.utilities + expForm.maintenance + expForm.software).toLocaleString()}</span></span>
+              <span className="text-gray-400 text-sm">Total: <span className="text-red-400 font-bold">${(expForm.labor + expForm.utilities + expForm.maintenance + expForm.software + expForm.lease + expForm.equipment).toLocaleString()}</span></span>
               <button onClick={saveExpenses} disabled={saving}
                 className="bg-red-600 hover:bg-red-500 disabled:bg-gray-700 text-white font-semibold px-4 py-2 rounded-lg text-sm transition-colors">
                 {saving ? "Saving…" : "Save Expenses"}

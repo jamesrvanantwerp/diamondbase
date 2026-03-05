@@ -38,17 +38,19 @@ export default function AdminPage() {
       // Get today's date in the format stored in DB e.g. "Mar 5, 2026"
       const today = new Date().toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
 
+      const currentMonth = new Date().toLocaleDateString("en-US", { month: "short", year: "numeric" });
+
       const [{ data: bookings }, { data: rev }, { data: exp }, { data: memberRows }] = await Promise.all([
         supabase.from("bookings").select("*").eq("date", today).eq("status", "confirmed").order("time"),
-        supabase.from("revenue_entries").select("total").order("created_at", { ascending: false }).limit(1),
-        supabase.from("expense_entries").select("total").order("created_at", { ascending: false }).limit(1),
+        supabase.from("revenue_entries").select("total").eq("month", currentMonth).single(),
+        supabase.from("expense_entries").select("total").eq("month", currentMonth).single(),
         supabase.from("members").select("id, name, email, tier, credits_total, credits_used, member_since").order("member_since", { ascending: false }),
       ]);
 
       if (bookings) setTodayBookings(bookings);
       setRevenue({
-        total: rev?.[0]?.total ?? 0,
-        expenses: exp?.[0]?.total ?? 0,
+        total: (rev as { total: number } | null)?.total ?? 0,
+        expenses: (exp as { total: number } | null)?.total ?? 0,
       });
       if (memberRows) { setMemberCount(memberRows.length); setMembers(memberRows); }
       setLoading(false);
@@ -56,10 +58,12 @@ export default function AdminPage() {
 
     fetchData();
 
-    // Real-time: update list when a new booking comes in
+    // Real-time: refresh when bookings, revenue, or expenses change
     const channel = supabase
-      .channel("admin-bookings")
+      .channel("admin-live")
       .on("postgres_changes", { event: "*", schema: "public", table: "bookings" }, fetchData)
+      .on("postgres_changes", { event: "*", schema: "public", table: "revenue_entries" }, fetchData)
+      .on("postgres_changes", { event: "*", schema: "public", table: "expense_entries" }, fetchData)
       .subscribe();
 
     return () => { supabase.removeChannel(channel); };
