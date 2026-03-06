@@ -30,6 +30,26 @@ function generatePin() {
   return Math.floor(1000 + Math.random() * 9000).toString();
 }
 
+function EasterEggModal({ src, alt, onClose }: { src: string; alt: string; onClose: () => void }) {
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm"
+      onClick={onClose}
+    >
+      <div className="relative max-w-xl w-full mx-4" onClick={(e) => e.stopPropagation()}>
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img src={src} alt={alt} className="w-full rounded-2xl shadow-2xl" />
+        <button
+          onClick={onClose}
+          className="absolute top-3 right-3 bg-black/60 hover:bg-black/80 text-white rounded-full w-8 h-8 flex items-center justify-center text-lg font-bold transition-colors"
+        >
+          ×
+        </button>
+      </div>
+    </div>
+  );
+}
+
 export default function BookPage() {
   const [step, setStep] = useState(0);
   const [selectedCage, setSelectedCage] = useState<string | null>(null);
@@ -37,13 +57,14 @@ export default function BookPage() {
   const [useCredit, setUseCredit] = useState(true);
   const [confirmed, setConfirmed] = useState(false);
   const [bookingError, setBookingError] = useState<string | null>(null);
+  const [easterEgg, setEasterEgg] = useState<"judges" | "oleg" | "alexey" | null>(null);
   const [pin] = useState(generatePin());
   const now = new Date();
   const todayRaw = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
   const [selectedDateRaw, setSelectedDateRaw] = useState(todayRaw);
   const selectedDate = new Date(selectedDateRaw + "T12:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
   const { addBooking, bookings } = useBookings();
-  const { member } = useAuth();
+  const { member, refreshMember } = useAuth();
 
   const isMember = !!member;
   const creditsLeft = Math.max(0, (member?.credits_total ?? 0) - (member?.credits_used ?? 0));
@@ -75,10 +96,13 @@ export default function BookPage() {
   }, [selectedDate, cage?.label]);
   const price = cage ? (isMember && cage.memberPrice ? cage.memberPrice : cage.price) : 0;
 
+  const easterEggSrc = easterEgg === "judges" ? "/Judges.png" : easterEgg === "oleg" ? "/Oleg and alex.png" : easterEgg === "alexey" ? "/Alexey.png" : null;
+
   if (confirmed) {
     return (
       <div className="min-h-screen bg-gray-950 flex items-center justify-center px-4">
-        <div className="bg-gray-900 border border-green-500/30 rounded-2xl p-10 max-w-md w-full text-center">
+        {easterEggSrc && <EasterEggModal src={easterEggSrc} alt="easter egg" onClose={() => setEasterEgg(null)} />}
+      <div className="bg-gray-900 border border-green-500/30 rounded-2xl p-10 max-w-md w-full text-center">
           <CheckCircle className="h-16 w-16 text-green-400 mx-auto mb-4" />
           <h2 className="text-2xl font-bold text-white mb-2">Booking Confirmed!</h2>
           <p className="text-gray-400 mb-8">Your cage is reserved. Your access PIN has been sent to your email and phone.</p>
@@ -119,6 +143,7 @@ export default function BookPage() {
 
   return (
     <div className="min-h-screen bg-gray-950 py-12 px-4">
+      {easterEggSrc && <EasterEggModal src={easterEggSrc} alt="easter egg" onClose={() => setEasterEgg(null)} />}
       <div className="max-w-3xl mx-auto">
         <h1 className="text-3xl font-bold text-white mb-2">Book a Cage</h1>
         <p className="text-gray-400 mb-8">Reserve your spot at DiamondBase.</p>
@@ -240,7 +265,23 @@ export default function BookPage() {
                   <button
                     key={time}
                     disabled={taken}
-                    onClick={() => setSelectedSlot(time)}
+                    onClick={() => {
+                      setSelectedSlot(time);
+                      if (
+                        (selectedCage === "cage1" || selectedCage === "cage1-60") &&
+                        selectedDate === "Mar 6, 2026" &&
+                        time === "8:00 PM"
+                      ) {
+                        setEasterEgg("oleg");
+                      }
+                      if (
+                        (selectedCage === "cage1" || selectedCage === "cage1-60") &&
+                        selectedDate === "Mar 7, 2026" &&
+                        time === "8:00 PM"
+                      ) {
+                        setEasterEgg("alexey");
+                      }
+                    }}
                     className={`py-2.5 px-3 rounded-lg text-sm font-medium transition-colors ${
                       taken
                         ? "bg-gray-800 text-gray-600 cursor-not-allowed line-through"
@@ -339,7 +380,15 @@ export default function BookPage() {
                 if (result.error) {
                   setBookingError(result.error);
                 } else {
+                  await refreshMember();
                   setConfirmed(true);
+                  if (
+                    (selectedCage === "cage1" || selectedCage === "cage1-60") &&
+                    selectedDate === "Mar 5, 2026" &&
+                    selectedSlot === "8:00 PM"
+                  ) {
+                    setEasterEgg("judges");
+                  }
                 }
               }}
               className="w-full bg-green-600 hover:bg-green-500 text-white font-semibold py-4 rounded-xl transition-colors flex items-center justify-center gap-2"

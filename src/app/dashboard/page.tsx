@@ -1,11 +1,21 @@
 "use client";
 import Link from "next/link";
 import { motion } from "framer-motion";
-import { Calendar, Lock, Star, AlertTriangle, CheckCircle, Clock, Zap, Trash2 } from "lucide-react";
+import { Calendar, Lock, Star, AlertTriangle, CheckCircle, Clock, Zap, Trash2, Target, Trophy, TrendingUp } from "lucide-react";
 import { useBookings } from "@/context/BookingContext";
 import { useAuth } from "@/context/AuthContext";
 import { useRouter } from "next/navigation";
 import { useEffect } from "react";
+import { sessionTrend } from "@/lib/mockData";
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
+
+const myStats = { avgEV: 94.2, maxEV: 108.1, avgLA: 12.4, hardHitPct: 52 };
+const mySessions = [
+  { date: "Feb 28, 2026", cage: "HitTrax Cage – 60 min", avgEV: 94.2, maxEV: 108.1, avgLA: 12.4, hardHitPct: 52 },
+  { date: "Feb 22, 2026", cage: "HitTrax Cage – 60 min", avgEV: 92.8, maxEV: 105.3, avgLA: 13.1, hardHitPct: 49 },
+  { date: "Feb 15, 2026", cage: "Cage #1 – 30 min", avgEV: 91.5, maxEV: 103.0, avgLA: 11.8, hardHitPct: 47 },
+  { date: "Feb 8, 2026", cage: "HitTrax Cage – 60 min", avgEV: 90.3, maxEV: 101.2, avgLA: 10.9, hardHitPct: 44 },
+];
 
 const fadeUp = {
   hidden: { opacity: 0, y: 16 },
@@ -14,7 +24,7 @@ const fadeUp = {
 
 export default function DashboardPage() {
   const { bookings, loading, cancelBooking } = useBookings();
-  const { user, member: authMember, loading: authLoading } = useAuth();
+  const { user, member: authMember, loading: authLoading, refreshMember } = useAuth();
   const router = useRouter();
 
   useEffect(() => {
@@ -168,7 +178,7 @@ export default function DashboardPage() {
                         const msg = refund
                           ? "Cancel this booking? Your credit will be refunded."
                           : "Cancel this booking? Less than 48 hours notice — your credit will NOT be refunded.";
-                        if (confirm(msg)) cancelBooking(b.id);
+                        if (confirm(msg)) { cancelBooking(b.id); refreshMember(); }
                       }}
                       className="opacity-0 group-hover:opacity-100 transition-opacity text-red-400 hover:text-red-300 p-1.5 rounded-lg hover:bg-red-500/10"
                       title="Cancel booking"
@@ -221,6 +231,87 @@ export default function DashboardPage() {
             </div>
           </motion.div>
         </div>
+
+        {/* Personal HitTrax Stats */}
+        <motion.div initial="hidden" animate="show" variants={fadeUp} custom={8} className="mt-6">
+          <div className="flex items-center gap-2 mb-4">
+            <Zap className="h-5 w-5 text-yellow-400" />
+            <h2 className="text-white font-bold text-lg">My HitTrax Stats</h2>
+            <span className="text-gray-500 text-xs ml-1">Mock data · HitTrax sync coming soon</span>
+          </div>
+
+          {/* Personal stat cards */}
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-6">
+            {[
+              { label: "Avg Exit Velocity", value: `${myStats.avgEV}`, unit: "mph", color: "text-blue-400", icon: Zap },
+              { label: "Personal Best EV", value: `${myStats.maxEV}`, unit: "mph", color: "text-yellow-400", icon: Trophy },
+              { label: "Avg Launch Angle", value: `${myStats.avgLA}`, unit: "°", color: "text-green-400", icon: Target },
+              { label: "Hard Hit %", value: `${myStats.hardHitPct}`, unit: "%", color: "text-purple-400", icon: TrendingUp },
+            ].map((s) => (
+              <div key={s.label} className="bg-gray-900 border border-gray-800 rounded-2xl p-5">
+                <s.icon className={`h-5 w-5 ${s.color} mb-2`} />
+                <p className={`text-2xl font-black ${s.color}`}>{s.value}<span className="text-base font-semibold ml-0.5">{s.unit}</span></p>
+                <p className="text-white text-sm font-medium mt-1">{s.label}</p>
+              </div>
+            ))}
+          </div>
+
+          {/* EV Trend Chart */}
+          <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6 mb-6">
+            <h3 className="text-white font-semibold mb-1">Exit Velocity Trend</h3>
+            <p className="text-gray-400 text-sm mb-5">Your average EV over the last 8 weeks</p>
+            <ResponsiveContainer width="100%" height={200}>
+              <LineChart data={sessionTrend}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#1f2937" />
+                <XAxis dataKey="week" tick={{ fill: "#6b7280", fontSize: 11 }} />
+                <YAxis domain={[84, 96]} tick={{ fill: "#6b7280", fontSize: 11 }} unit=" mph" />
+                <Tooltip
+                  contentStyle={{ background: "#111827", border: "1px solid #374151", borderRadius: "8px", color: "#fff" }}
+                  labelStyle={{ color: "#9ca3af" }}
+                />
+                <Line type="monotone" dataKey="ev" stroke="#3b82f6" strokeWidth={2.5} dot={{ fill: "#3b82f6", r: 4 }} name="Avg EV" />
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+
+          {/* Recent Sessions */}
+          <div className="bg-gray-900 border border-gray-800 rounded-2xl overflow-hidden">
+            <div className="px-6 py-4 border-b border-gray-800">
+              <h3 className="text-white font-semibold">Recent Sessions</h3>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-gray-800 text-gray-500 text-xs uppercase tracking-wide">
+                    <th className="text-left px-6 py-3">Date</th>
+                    <th className="text-left px-6 py-3">Session</th>
+                    <th className="text-right px-6 py-3">Avg EV</th>
+                    <th className="text-right px-6 py-3">Max EV</th>
+                    <th className="text-right px-6 py-3">Avg LA</th>
+                    <th className="text-right px-6 py-3">Hard Hit%</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-800">
+                  {mySessions.map((s, i) => (
+                    <tr key={i} className="hover:bg-gray-800/30 transition-colors">
+                      <td className="px-6 py-3 text-gray-400">{s.date}</td>
+                      <td className="px-6 py-3 text-white font-medium">{s.cage}</td>
+                      <td className="px-6 py-3 text-right text-blue-400 font-bold">{s.avgEV} mph</td>
+                      <td className="px-6 py-3 text-right text-gray-300">{s.maxEV} mph</td>
+                      <td className="px-6 py-3 text-right text-gray-300">{s.avgLA}°</td>
+                      <td className="px-6 py-3 text-right">
+                        <span className={`font-semibold ${s.hardHitPct >= 48 ? "text-green-400" : s.hardHitPct >= 40 ? "text-yellow-400" : "text-gray-300"}`}>
+                          {s.hardHitPct}%
+                        </span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </motion.div>
+
       </div>
     </div>
   );

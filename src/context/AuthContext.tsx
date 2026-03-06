@@ -18,10 +18,12 @@ export type Member = {
 type AuthContextType = {
   user: User | null;
   member: Member | null;
+  isAdmin: boolean;
   loading: boolean;
   signIn: (email: string, password: string) => Promise<string | null>;
-  signUp: (email: string, password: string, name: string) => Promise<string | null>;
+  signUp: (email: string, password: string, name: string, tier?: string, membershipType?: string) => Promise<string | null>;
   signOut: () => Promise<void>;
+  refreshMember: () => Promise<void>;
 };
 
 const AuthContext = createContext<AuthContextType | null>(null);
@@ -29,42 +31,32 @@ const AuthContext = createContext<AuthContextType | null>(null);
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [member, setMember] = useState<Member | null>(null);
+  const [isAdmin, setIsAdmin] = useState(false);
   const [loading, setLoading] = useState(true);
 
-  const fetchMember = async (userId: string, email: string) => {
-    const { data } = await supabase
-      .from("members")
-      .select("*")
-      .eq("user_id", userId)
-      .single();
-
-    if (data) {
-      setMember(data);
-    } else {
-      // Auto-create a member record for new users
-      const name = email.split("@")[0].replace(/[._]/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
-      const { data: newMember } = await supabase
-        .from("members")
-        .insert([{ user_id: userId, email, name, tier: "Silver", credits_total: 2, credits_used: 0 }])
-        .select()
-        .single();
-      if (newMember) setMember(newMember);
-    }
+  const fetchMember = async (userId: string) => {
+    const [{ data: memberData }, { data: adminData }] = await Promise.all([
+      supabase.from("members").select("*").eq("user_id", userId).single(),
+      supabase.from("admins").select("id").eq("user_id", userId).single(),
+    ]);
+    if (memberData) setMember(memberData);
+    setIsAdmin(!!adminData);
   };
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
       setUser(session?.user ?? null);
-      if (session?.user) fetchMember(session.user.id, session.user.email ?? "");
+      if (session?.user) fetchMember(session.user.id);
       else setLoading(false);
     });
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
       setUser(session?.user ?? null);
       if (session?.user) {
-        fetchMember(session.user.id, session.user.email ?? "").then(() => setLoading(false));
+        fetchMember(session.user.id).then(() => setLoading(false));
       } else {
         setMember(null);
+        setIsAdmin(false);
         setLoading(false);
       }
     });
@@ -77,7 +69,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (!user) return;
     const channel = supabase
       .channel("my-member-record")
-      .on("postgres_changes", { event: "UPDATE", schema: "public", table: "members", filter: `user_id=eq.${user.id}` },
+      .on("postgres_changes", { event: "*", schema: "public", table: "members", filter: `user_id=eq.${user.id}` },
         (payload) => setMember(payload.new as Member))
       .subscribe();
     return () => { supabase.removeChannel(channel); };
@@ -88,25 +80,38 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return error?.message ?? null;
   };
 
-  const signUp = async (email: string, password: string, name: string) => {
+  const signUp = async (email: string, password: string, name: string, tier = "Silver", membershipType = "individual") => {
     const { data, error } = await supabase.auth.signUp({ email, password });
     if (error) return error.message;
     if (data.user) {
-      await supabase.from("members").insert([{
+      const creditsMap: Record<string, number> = {
+        "Silver-individual": 2, "Gold-individual": 4, "Platinum-individual": 99,
+        "Silver-team": 1, "Gold-team": 2, "Platinum-team": 4,
+      };
+      const credits_total = creditsMap[`${tier}-${membershipType}`] ?? 2;
+      // Upsert so that if the race condition already inserted a Silver record, we overwrite it
+      const { data: newMember } = await supabase.from("members").upsert([{
         user_id: data.user.id, email, name,
-        tier: "Silver", credits_total: 2, credits_used: 0,
-      }]);
+        tier, membership_type: membershipType,
+        credits_total, credits_used: 0,
+      }], { onConflict: "user_id" }).select().single();
+      if (newMember) setMember(newMember);
     }
     return null;
+  };
+
+  const refreshMember = async () => {
+    if (user) await fetchMember(user.id);
   };
 
   const signOut = async () => {
     await supabase.auth.signOut();
     setMember(null);
+    setIsAdmin(false);
   };
 
   return (
-    <AuthContext.Provider value={{ user, member, loading, signIn, signUp, signOut }}>
+    <AuthContext.Provider value={{ user, member, isAdmin, loading, signIn, signUp, signOut, refreshMember }}>
       {children}
     </AuthContext.Provider>
   );

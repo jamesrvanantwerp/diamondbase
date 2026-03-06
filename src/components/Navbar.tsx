@@ -9,15 +9,13 @@ const navLinks = [
   { href: "/", label: "Home" },
   { href: "/book", label: "Book a Cage" },
   { href: "/dashboard", label: "My Dashboard" },
-  { href: "/stats", label: "HitTrax Stats" },
-  { href: "/leagues", label: "League" },
-  { href: "/admin", label: "Admin" },
+  { href: "/leagues", label: "HitTrax" },
 ];
 
 export default function Navbar() {
   const pathname = usePathname();
   const router = useRouter();
-  const { user, member, signOut } = useAuth();
+  const { user, member, isAdmin, signOut } = useAuth();
   const [menuOpen, setMenuOpen] = useState(false);
 
   const handleSignOut = async () => {
@@ -50,6 +48,16 @@ export default function Navbar() {
                 {link.label}
               </Link>
             ))}
+            {isAdmin && (
+              <Link href="/admin"
+                className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+                  pathname.startsWith("/admin")
+                    ? "bg-blue-600 text-white"
+                    : "text-gray-300 hover:text-white hover:bg-gray-800"
+                }`}>
+                Admin
+              </Link>
+            )}
           </div>
 
           <div className="hidden md:flex items-center gap-3">
@@ -106,6 +114,16 @@ export default function Navbar() {
               {link.label}
             </Link>
           ))}
+          {isAdmin && (
+            <Link href="/admin" onClick={() => setMenuOpen(false)}
+              className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+                pathname.startsWith("/admin")
+                  ? "bg-blue-600 text-white"
+                  : "text-gray-300 hover:text-white hover:bg-gray-800"
+              }`}>
+              Admin
+            </Link>
+          )}
           {user ? (
             <button onClick={handleSignOut} className="text-left px-4 py-2 text-gray-400 hover:text-white text-sm rounded-lg hover:bg-gray-800 flex items-center gap-2">
               <LogOut className="h-4 w-4" /> Sign Out

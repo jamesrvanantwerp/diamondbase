@@ -122,7 +122,7 @@ export default function HomePage() {
                     </li>
                   ))}
                 </ul>
-                <Link href="/book"
+                <Link href={`/login?mode=signup&tier=${tier.name}&type=individual`}
                   className={`block text-center py-3 rounded-xl font-semibold text-sm transition-all hover:scale-[1.02] ${i === 2 ? "bg-blue-600 hover:bg-blue-500 text-white shadow-md shadow-blue-600/30" : "bg-gray-800 hover:bg-gray-700 text-white"}`}>
                   Get Started
                 </Link>
@@ -157,7 +157,7 @@ export default function HomePage() {
                     </li>
                   ))}
                 </ul>
-                <Link href="/book"
+                <Link href={`/login?mode=signup&tier=${tier.name}&type=team`}
                   className="block text-center py-3 rounded-xl font-semibold text-sm bg-gray-800 hover:bg-gray-700 text-white transition-all hover:scale-[1.02]">
                   Get Started
                 </Link>

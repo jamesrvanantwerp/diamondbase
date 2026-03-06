@@ -1,8 +1,10 @@
 "use client";
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { Users, Calendar, DollarSign, AlertTriangle, TrendingUp, Clock } from "lucide-react";
+import { Users, Calendar, DollarSign, AlertTriangle, TrendingUp, Clock, Trash2, ChevronLeft, ChevronRight } from "lucide-react";
 import { supabase } from "@/lib/supabase";
+import { useAuth } from "@/context/AuthContext";
+import { useRouter } from "next/navigation";
 
 const TIER_RATES: Record<string, number> = { Silver: 50, Gold: 90, Platinum: 150 };
 
@@ -27,6 +29,9 @@ type Member = {
 };
 
 export default function AdminPage() {
+  const { isAdmin, loading: authLoading } = useAuth();
+  const router = useRouter();
+  const [selectedDate, setSelectedDate] = useState(new Date());
   const [todayBookings, setTodayBookings] = useState<Booking[]>([]);
   const [revenue, setRevenue] = useState({ total: 0, expenses: 0 });
   const [memberCount, setMemberCount] = useState(0);
@@ -34,14 +39,18 @@ export default function AdminPage() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    if (!authLoading && !isAdmin) router.push("/");
+  }, [isAdmin, authLoading, router]);
+
+  useEffect(() => {
     const fetchData = async () => {
-      const today = new Date().toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+      const dateLabel = selectedDate.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
       const currentMonthAbbr = new Date().toLocaleDateString("en-US", { month: "short" });
       const currentYear = new Date().getFullYear();
       const currentMonthIndex = new Date().getMonth();
 
       const [{ data: bookings }, { data: expLogs }, { data: revLogs }, { data: memberRows }, { data: allBookings }] = await Promise.all([
-        supabase.from("bookings").select("*").eq("date", today).eq("status", "confirmed").order("time"),
+        supabase.from("bookings").select("*").eq("date", dateLabel).eq("status", "confirmed").order("time"),
         supabase.from("expense_logs").select("amount, date"),
         supabase.from("revenue_logs").select("amount, date"),
         supabase.from("members").select("id, name, email, tier, credits_total, credits_used, member_since").order("member_since", { ascending: false }),
@@ -80,7 +89,14 @@ export default function AdminPage() {
       .subscribe();
 
     return () => { supabase.removeChannel(channel); };
-  }, []);
+  }, [selectedDate]);
+
+  const cancelBooking = async (id: string) => {
+    if (!confirm("Cancel this booking?")) return;
+    const { error } = await supabase.from("bookings").update({ status: "cancelled" }).eq("id", id);
+    if (error) { alert("Failed to cancel: " + error.message); return; }
+    setTodayBookings((prev) => prev.filter((b) => b.id !== id));
+  };
 
   const netProfit = revenue.total - revenue.expenses;
 
@@ -131,12 +147,31 @@ export default function AdminPage() {
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          {/* Today's Bookings */}
+          {/* Daily Bookings */}
           <div className="lg:col-span-2 bg-gray-900 border border-gray-800 rounded-2xl overflow-hidden">
             <div className="p-6 border-b border-gray-800 flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <Calendar className="h-5 w-5 text-blue-400" />
-                <h2 className="text-white font-bold">Today&apos;s Bookings</h2>
+              <div className="flex items-center gap-3">
+                <Calendar className="h-5 w-5 text-blue-400 flex-shrink-0" />
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => setSelectedDate((d) => { const n = new Date(d); n.setDate(n.getDate() - 1); return n; })}
+                    className="text-gray-400 hover:text-white p-1 rounded-lg hover:bg-gray-700 transition-colors"
+                  >
+                    <ChevronLeft className="h-4 w-4" />
+                  </button>
+                  <span className="text-white font-bold w-40 text-center">
+                    {selectedDate.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", year: "numeric" })}
+                    {selectedDate.toDateString() === new Date().toDateString() && (
+                      <span className="ml-2 text-xs text-blue-400 font-normal">Today</span>
+                    )}
+                  </span>
+                  <button
+                    onClick={() => setSelectedDate((d) => { const n = new Date(d); n.setDate(n.getDate() + 1); return n; })}
+                    className="text-gray-400 hover:text-white p-1 rounded-lg hover:bg-gray-700 transition-colors"
+                  >
+                    <ChevronRight className="h-4 w-4" />
+                  </button>
+                </div>
               </div>
               <span className="text-gray-400 text-sm">{todayBookings.length} {todayBookings.length === 1 ? "booking" : "bookings"}</span>
             </div>
@@ -148,7 +183,7 @@ export default function AdminPage() {
             ) : todayBookings.length === 0 ? (
               <div className="text-center py-12">
                 <Calendar className="h-8 w-8 text-gray-700 mx-auto mb-2" />
-                <p className="text-gray-500 text-sm">No bookings yet today.</p>
+                <p className="text-gray-500 text-sm">No bookings for this day.</p>
               </div>
             ) : (
               <div className="divide-y divide-gray-800">
@@ -161,9 +196,18 @@ export default function AdminPage() {
                         <p className="text-gray-500 text-xs">{b.cage_type} · {b.payment_method}</p>
                       </div>
                     </div>
-                    <span className="text-xs font-semibold px-2.5 py-1 rounded-full bg-blue-500/20 text-blue-400">
-                      confirmed
-                    </span>
+                    <div className="flex items-center gap-3">
+                      <span className="text-xs font-semibold px-2.5 py-1 rounded-full bg-blue-500/20 text-blue-400">
+                        confirmed
+                      </span>
+                      <button
+                        onClick={() => cancelBooking(b.id)}
+                        className="text-red-400 hover:text-red-300 p-1.5 rounded-lg hover:bg-red-500/10 transition-colors"
+                        title="Cancel booking"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </button>
+                    </div>
                   </div>
                 ))}
               </div>
